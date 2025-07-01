@@ -1,0 +1,8 @@
+output_acdc/
+output_acdc_1/
+output_synapse/
+output_synapse_1/
+unetr_pp/evaluation/unetr_pp_acdc_checkpoint/*
+unetr_pp/evaluation/unetr_pp_synapse_checkpoint/*
+models/
+weights/

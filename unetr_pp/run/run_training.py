@@ -111,7 +111,7 @@ def main():
     run_mixed_precision = not fp32
 
     val_folder = args.val_folder
-
+    # print(task)
     if not task.startswith("Task"):
         task_id = int(task)
         task = convert_id_to_task_name(task_id)

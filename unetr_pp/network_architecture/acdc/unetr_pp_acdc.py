@@ -76,6 +76,7 @@ class UNETR_PP(SegmentationNetwork):
             upsample_kernel_size=2,
             norm_name=norm_name,
             out_size=4*10*10,
+            depth_size = 4
         )
         self.decoder4 = UnetrUpBlock(
             spatial_dims=3,
@@ -85,6 +86,7 @@ class UNETR_PP(SegmentationNetwork):
             upsample_kernel_size=2,
             norm_name=norm_name,
             out_size=8*20*20,
+            depth_size = 8
         )
         self.decoder3 = UnetrUpBlock(
             spatial_dims=3,
@@ -94,6 +96,7 @@ class UNETR_PP(SegmentationNetwork):
             upsample_kernel_size=2,
             norm_name=norm_name,
             out_size=16*40*40,
+            depth_size = 16
         )
         self.decoder2 = UnetrUpBlock(
             spatial_dims=3,
@@ -103,6 +106,7 @@ class UNETR_PP(SegmentationNetwork):
             upsample_kernel_size=(1, 4, 4),
             norm_name=norm_name,
             out_size=16*160*160,
+            depth_size = 16,
             conv_decoder=True,
         )
         self.out1 = UnetOutBlock(spatial_dims=3, in_channels=feature_size, out_channels=out_channels)
@@ -116,6 +120,7 @@ class UNETR_PP(SegmentationNetwork):
         return x
 
     def forward(self, x_in):
+        # print(x_in.shape)
         x_output, hidden_states = self.unetr_pp_encoder(x_in)
 
         convBlock = self.encoder1(x_in)
