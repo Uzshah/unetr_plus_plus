@@ -92,6 +92,7 @@ class UNETR_PP(SegmentationNetwork):
             norm_name=norm_name,
             out_size=8 * 8 * 8,
             depth_size = 8,
+            bottle_neck= False,
         )
         self.decoder4 = UnetrUpBlock(
             spatial_dims=3,

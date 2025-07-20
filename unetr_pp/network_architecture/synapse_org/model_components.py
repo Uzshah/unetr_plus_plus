@@ -12,7 +12,7 @@ einops, _ = optional_import("einops")
 
 class UnetrPPEncoder(nn.Module):
     def __init__(self, input_size=[32 * 32 * 32, 16 * 16 * 16, 8 * 8 * 8, 4 * 4 * 4],dims=[32, 64, 128, 256],
-                 proj_size =[64,64,64,32], depths=[3, 3, 3, 3],  num_heads=4, spatial_dims=3, in_channels=1, dropout=0.0, transformer_dropout_rate=0.15, depth_size = [32, 16, 8, 4], **kwargs):
+                 proj_size =[64,64,64,32], depths=[3, 3, 3, 3],  num_heads=4, spatial_dims=3, in_channels=1, dropout=0.0, transformer_dropout_rate=0.15 ,**kwargs):
         super().__init__()
 
         self.downsample_layers = nn.ModuleList()  # stem and 3 intermediate downsampling conv layers
@@ -34,14 +34,9 @@ class UnetrPPEncoder(nn.Module):
         for i in range(4):
             stage_blocks = []
             for j in range(depths[i]):
-                stage_blocks.append(TransformerBlock(input_size=input_size[i], hidden_size=dims[i],  
-                                                   proj_size=proj_size[i], num_heads=num_heads,
-                                                   dropout_rate=transformer_dropout_rate, pos_embed=True, 
-                                                     depth_size = depth_size[i], bottle_neck = False))
-            
-                    
+                stage_blocks.append(TransformerBlock(input_size=input_size[i], hidden_size=dims[i],  proj_size=proj_size[i], num_heads=num_heads,
+                                     dropout_rate=transformer_dropout_rate, pos_embed=True))
             self.stages.append(nn.Sequential(*stage_blocks))
-            
         self.hidden_states = []
         self.apply(self._init_weights)
 
@@ -88,9 +83,7 @@ class UnetrUpBlock(nn.Module):
             num_heads: int = 4,
             out_size: int = 0,
             depth: int = 3,
-            depth_size:int = 16,
             conv_decoder: bool = False,
-            bottle_neck: bool = False,
     ) -> None:
         """
         Args:
@@ -130,7 +123,7 @@ class UnetrUpBlock(nn.Module):
             stage_blocks = []
             for j in range(depth):
                 stage_blocks.append(TransformerBlock(input_size=out_size, hidden_size= out_channels, proj_size=proj_size, num_heads=num_heads,
-                                                     dropout_rate=0.15, pos_embed=True, depth_size = depth_size, bottle_neck=bottle_neck))
+                                                     dropout_rate=0.15, pos_embed=True))
             self.decoder_block.append(nn.Sequential(*stage_blocks))
 
     def _init_weights(self, m):

@@ -170,7 +170,7 @@ class unetr_pp_trainer_synapse(Trainer_synapse):
                              )
 
         if torch.cuda.is_available():
-            self.network.to("cuda:1")
+            self.network.to("cuda")
         self.network.inference_apply_nonlin = softmax_helper
         # Print the network parameters & Flops
         n_parameters = sum(p.numel() for p in self.network.parameters() if p.requires_grad)
@@ -263,8 +263,8 @@ class unetr_pp_trainer_synapse(Trainer_synapse):
         target = maybe_to_torch(target)
 
         if torch.cuda.is_available():
-            data = to_cuda(data, gpu_id=1)
-            target = to_cuda(target, gpu_id=1)
+            data = to_cuda(data)
+            target = to_cuda(target)
 
         self.optimizer.zero_grad()
 

@@ -34,9 +34,14 @@ class UnetrPPEncoder(nn.Module):
         for i in range(4):
             stage_blocks = []
             for j in range(depths[i]):
-                stage_blocks.append(TransformerBlock(input_size=input_size[i], hidden_size=dims[i],  proj_size=proj_size[i], num_heads=num_heads,
-                                     dropout_rate=transformer_dropout_rate, pos_embed=True, depth_size = depth_size[i]))
+                stage_blocks.append(TransformerBlock(input_size=input_size[i], hidden_size=dims[i],  
+                                                   proj_size=proj_size[i], num_heads=num_heads,
+                                                   dropout_rate=transformer_dropout_rate, pos_embed=True, 
+                                                     depth_size = depth_size[i], bottle_neck = False))
+            
+                    
             self.stages.append(nn.Sequential(*stage_blocks))
+            
         self.hidden_states = []
         self.apply(self._init_weights)
 
@@ -85,6 +90,7 @@ class UnetrUpBlock(nn.Module):
             depth: int = 3,
             depth_size:int = 16,
             conv_decoder: bool = False,
+            bottle_neck: bool = False,
     ) -> None:
         """
         Args:
@@ -124,7 +130,7 @@ class UnetrUpBlock(nn.Module):
             stage_blocks = []
             for j in range(depth):
                 stage_blocks.append(TransformerBlock(input_size=out_size, hidden_size= out_channels, proj_size=proj_size, num_heads=num_heads,
-                                                     dropout_rate=0.15, pos_embed=True, depth_size = depth_size))
+                                                     dropout_rate=0.15, pos_embed=True, depth_size = depth_size, bottle_neck=bottle_neck))
             self.decoder_block.append(nn.Sequential(*stage_blocks))
 
     def _init_weights(self, m):
