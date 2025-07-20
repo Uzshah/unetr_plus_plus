@@ -98,105 +98,122 @@ class ECD(nn.Module):
     Efficient Channel-Depth attention block - Optimized for reduced FLOPs
     """
     def __init__(self, depth_size: int, hidden_size, proj_size, num_heads=4, qkv_bias=False,
-                 channel_attn_drop=0.1, spatial_attn_drop=0.1):
+                 channel_attn_drop=0.1, spatial_attn_drop=0.1, 
+                 noise_std=0.01, noise_schedule='fixed', apply_noise_to='input'):
         super().__init__()
         self.num_heads = num_heads
-        self.proj_size = proj_size
-        self.depth_size = depth_size
-        self.hidden_size = hidden_size
-        self.head_dim = hidden_size // num_heads
+        self.head_dim = hidden_size//num_heads
         
-        # Temperature parameters
-        self.temperature = nn.Parameter(torch.ones(depth_size, 1, 1))
-        self.temperature2 = nn.Parameter(torch.ones(hidden_size, 1, 1))
+        # Noise parameters
+        self.noise_std = noise_std
+        self.noise_schedule = noise_schedule  # 'fixed', 'decay', 'adaptive'
+        self.apply_noise_to = apply_noise_to  # 'input', 'attention', 'features', 'all'
+        self.training_step = 0
         
-        # Linear layers for samentic information (channel wise attention) and for geometic information (depth attention)
-        # self.qkv_c = nn.Linear(hidden_size, hidden_size * 3, bias=qkv_bias)
-        # self.qkv_d = nn.Linear(depth_size, depth_size * 3, bias=qkv_bias)
-        self.qkv_c = nn.Conv3d(hidden_size, hidden_size * 3, 
-                       kernel_size=1, bias=qkv_bias)
-        self.qkv_d = nn.Conv3d(depth_size, depth_size * 3, 
-                       kernel_size=1, bias=qkv_bias)
-        # Dropout layers
+        # Original layers
+        self.qkv_c = nn.Linear(hidden_size, hidden_size * 3, bias=qkv_bias)
+        self.qkv_d = nn.Linear(hidden_size, hidden_size, bias=qkv_bias)
         self.attn_drop = nn.Dropout(channel_attn_drop)
         self.attn_drop_2 = nn.Dropout(spatial_attn_drop)
-        
-        # Output projections
         self.out_proj = nn.Linear(hidden_size, int(hidden_size // 2))
         self.out_proj2 = nn.Linear(hidden_size, int(hidden_size // 2))
-
+    
+    def _get_noise_std(self):
+        """Get noise standard deviation based on schedule"""
+        if self.noise_schedule == 'fixed':
+            return self.noise_std
+        elif self.noise_schedule == 'decay':
+            # Exponential decay: starts high, decreases over time
+            decay_rate = 0.99
+            return self.noise_std * (decay_rate ** self.training_step)
+        elif self.noise_schedule == 'adaptive':
+            # Adaptive based on training progress (could be customized)
+            return self.noise_std * max(0.1, 1.0 - self.training_step / 10000)
+        else:
+            return self.noise_std
+    
+    def _add_gaussian_noise(self, tensor, std=None):
+        """Add Gaussian noise to tensor during training"""
+        if not self.training:
+            return tensor
+        
+        if std is None:
+            std = self._get_noise_std()
+        
+        noise = torch.randn_like(tensor) * std
+        return tensor + noise
     
     def forward(self, x):
         B, C, D, H, W = x.shape
         N = H * W
         
-        # Channel attention using Conv3D
-        # Apply conv3d directly on the 5D tensor
-        qkv_c_conv = self.qkv_c(x)  # [B, 3*C, D, H, W]
+        # Update training step for noise scheduling
+        if self.training:
+            self.training_step += 1
         
-        # Single reshape and permute operation
-        qkv_c = qkv_c_conv.reshape(B, 3, C, D, N).permute(1, 0, 3, 4, 2)  # [3, B, D, N, C]
-        q_c, k_c, v_c = qkv_c[0], qkv_c[1], qkv_c[2]  # Each: [B, D, N, C]
+        # Apply noise to input if specified
+        if self.apply_noise_to in ['input', 'all']:
+            x = self._add_gaussian_noise(x)
         
-        # Transpose for attention computation
-        q_c = q_c.transpose(-2, -1)  # [B, D, C, N]
-        k_c = k_c.transpose(-2, -1)  # [B, D, C, N]
-        v_c = v_c.transpose(-2, -1)  # [B, D, C, N]
+        x_reshaped = x.permute(0, 2, 3, 4, 1).view(B, D, N, C)
         
-        # Use inplace normalization to save memory
+        qkv_c = self.qkv_c(x_reshaped).reshape(B, D, N, 3, C).permute(3, 0, 1, 2, 4)
+        q_d = self.qkv_d(x_reshaped).reshape(B, D, N, C)
+        q_c, k_c, v_c = qkv_c[0], qkv_c[1], qkv_c[2]
+        k_shared, v_shared = k_c, v_c
+        
+        # Apply noise to features if specified
+        if self.apply_noise_to in ['features', 'all']:
+            q_c = self._add_gaussian_noise(q_c, std=self._get_noise_std() * 0.5)
+            k_c = self._add_gaussian_noise(k_c, std=self._get_noise_std() * 0.5)
+            v_c = self._add_gaussian_noise(v_c, std=self._get_noise_std() * 0.5)
+            q_d = self._add_gaussian_noise(q_d, std=self._get_noise_std() * 0.5)
+        
+        # Channel attention 
+        q_c = q_c.reshape(B*D, N, self.num_heads, C//self.num_heads).permute(0, 2, 1, 3)
+        k_c = k_c.reshape(B*D, N, self.num_heads, C//self.num_heads).permute(0, 2, 1, 3)
+        v_c = v_c.reshape(B*D, N, self.num_heads, C//self.num_heads).permute(0, 2, 1, 3)
+        
+        q_c = q_c.transpose(-2, -1)
+        k_c = k_c.transpose(-2, -1)
+        v_c = v_c.transpose(-2, -1)
         q_c = F.normalize(q_c, dim=-1)
         k_c = F.normalize(k_c, dim=-1)
         
-        # Compute channel attention
-        attn_c = torch.matmul(q_c, k_c.transpose(-2, -1)) * self.temperature
-        attn_c = F.softmax(attn_c, dim=-1)
-        attn_c = self.attn_drop(attn_c)
+        attn_CA = (q_c @ k_c.transpose(-2, -1)) / (N ** 0.5)
         
-        # Apply channel attention
-        x_c = torch.matmul(attn_c, v_c).permute(0, 2, 3, 1).reshape(B, D, N, C)
-        x_c = self.out_proj(x_c)
+        # Apply noise to attention weights if specified
+        if self.apply_noise_to in ['attention', 'all']:
+            attn_CA = self._add_gaussian_noise(attn_CA, std=self._get_noise_std() * 0.1)
         
-        # Depth attention using Conv3D
-        # Permute to put depth in channel dimension for conv3d
+        attn_CA = attn_CA.softmax(dim=-1)
+        attn_CA = self.attn_drop(attn_CA)
+        x_CA = (attn_CA @ v_c).reshape(B, D, C, N).permute(0, 1, 3, 2)
+        x_CA = self.out_proj(x_CA)
         
-        x_depth = x.permute(0, 2, 1, 3, 4)  # [B, D, C, H, W]
-        qkv_d_conv = self.qkv_d(x_depth)  # [B, 3*D, C, H, W]
-        # print(qkv_d_conv.shape)
-        qkv_d_conv = qkv_d_conv.reshape(B, 3, D, C, H, W)  # [B, 3, D, C, H, W]
+        # Depth attention
+        q_d = q_d.permute(0, 3, 2, 1).reshape(B*C, N, D) 
+        k_d = k_shared.permute(0, 3, 2, 1).reshape(B*C, N, D) 
+        v_d = v_shared.permute(0, 3, 2, 1).reshape(B*C, N, D) 
         
-        # Reshape for attention computation - we want [3, B, C, N, D] for depth attention
-        qkv_d_conv = qkv_d_conv.permute(1, 0, 3, 2, 4, 5)  # [3, B, C, D, H, W]
-        qkv_d = qkv_d_conv.reshape(3, B, C, D, N).permute(0, 1, 2, 4, 3)  # [3, B, C, N, D]
-        q_d, k_d, v_d = qkv_d[0], qkv_d[1], qkv_d[2]  # Each: [B, C, N, D]
-        
-        # Transpose for attention computation
-        q_d = q_d.transpose(-2, -1)  # [B, C, D, N]
-        k_d = k_d.transpose(-2, -1)  # [B, C, D, N]
-        v_d = v_d.transpose(-2, -1)  # [B, C, D, N]
-        
-        # Use inplace normalization to save memory
+        q_d = q_d.transpose(-2, -1)
+        k_d = k_d.transpose(-2, -1)
+        v_d = v_d.transpose(-2, -1)
         q_d = F.normalize(q_d, dim=-1)
         k_d = F.normalize(k_d, dim=-1)
         
-        # Compute depth attention
-        attn_d = torch.matmul(q_d, k_d.transpose(-2, -1)) * self.temperature2
-        attn_d = F.softmax(attn_d, dim=-1)
-        attn_d = self.attn_drop_2(attn_d)
+        attn_D = (q_d @ k_d.transpose(-2, -1)) / (N ** 0.5)
         
-        # Apply depth attention
-        x_d = torch.matmul(attn_d, v_d).permute(0, 2, 3, 1).reshape(B, C, N, D)
-        # Need to reshape to match x_c format [B, D, N, C]
-        x_d = x_d.permute(0, 3, 2, 1).reshape(B, D, N, C)
-        x_d = self.out_proj2(x_d)
+        # Apply noise to depth attention weights if specified
+        if self.apply_noise_to in ['attention', 'all']:
+            attn_D = self._add_gaussian_noise(attn_D, std=self._get_noise_std() * 0.1)
         
-        # Concatenate channel and depth features
-        x_out = torch.cat((x_c, x_d), dim=-1)  # [B, D, N, C]
+        attn_D = attn_D.softmax(dim=-1)
+        attn_D = self.attn_drop_2(attn_D)
+        x_D = (attn_D @ v_d)
+        x_D = x_D.reshape(B, C, D, N).permute(0, 2, 3, 1)
+        x_D = self.out_proj2(x_D)
         
-        # Reshape back to original format
-        x_out = x_out.permute(0, 3, 1, 2).reshape(B, C, D, H, W)
+        x = torch.cat((x_CA, x_D), dim=-1).permute(0, 3, 1, 2).reshape(B, C, D, H, W)
         
-        return x_out
-
-    @torch.jit.ignore
-    def no_weight_decay(self):
-        return {'temperature', 'temperature2'}
+        return x
