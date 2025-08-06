@@ -25,7 +25,7 @@ class UNETR_PP(SegmentationNetwork):
             depths=None,
             dims=None,
             conv_op=nn.Conv3d,
-            do_ds=True,
+            do_ds=False,
 
     ) -> None:
         """
@@ -88,7 +88,7 @@ class UNETR_PP(SegmentationNetwork):
             in_channels=feature_size * 16,
             out_channels=feature_size * 8,
             kernel_size=3,
-            upsample_kernel_size=2,
+            upsample_kernel_size=2,#(1, 2, 2,),
             norm_name=norm_name,
             out_size=8 * 8 * 8,
             depth_size = 8,
@@ -99,7 +99,7 @@ class UNETR_PP(SegmentationNetwork):
             in_channels=feature_size * 8,
             out_channels=feature_size * 4,
             kernel_size=3,
-            upsample_kernel_size=2,
+            upsample_kernel_size=2,#(1, 2, 2,),
             norm_name=norm_name,
             out_size=16 * 16 * 16,
             depth_size = 16,
@@ -109,7 +109,7 @@ class UNETR_PP(SegmentationNetwork):
             in_channels=feature_size * 4,
             out_channels=feature_size * 2,
             kernel_size=3,
-            upsample_kernel_size=2,
+            upsample_kernel_size=2,#(1, 2, 2,),
             norm_name=norm_name,
             out_size=32 * 32 * 32,
             depth_size = 32,
@@ -151,8 +151,10 @@ class UNETR_PP(SegmentationNetwork):
         dec3 = self.decoder5(dec4, enc3)
         dec2 = self.decoder4(dec3, enc2)
         dec1 = self.decoder3(dec2, enc1)
-
+        
         out = self.decoder2(dec1, convBlock)
+        # print(dec1.shape, dec2.shape, out.shape)
+        
         if self.do_ds:
             logits = [self.out1(out), self.out2(dec1), self.out3(dec2)]
         else:

@@ -136,7 +136,7 @@ class UnetrUpBlock(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def forward(self, inp, skip):
-
+        # print(inp.shape, skip.shape)
         out = self.transp_conv(inp)
         out = out + skip
         out = self.decoder_block[0](out)

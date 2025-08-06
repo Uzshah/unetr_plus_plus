@@ -272,7 +272,7 @@ class unetr_pp_trainer_synapse(Trainer_synapse):
             with autocast():
                 output = self.network(data)
                 del data
-
+                # print(target[0].shape, target[1].shape, target[-1].shape)
                 l = self.loss(output, target)
 
             if do_backprop:
@@ -284,6 +284,7 @@ class unetr_pp_trainer_synapse(Trainer_synapse):
         else:
             output = self.network(data)
             del data
+            # print(target[0].shape, target[1].shape, target[-1].shape)
             l = self.loss(output, target)
 
             if do_backprop:

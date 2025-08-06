@@ -53,7 +53,7 @@ class TransformerBlock(nn.Module):
         B, C, H, W, D = x.shape
 
         x = x.reshape(B, C, H * W * D).permute(0, 2, 1)
-
+        # print(x.shape, self.pos_embed.shape)
         if self.pos_embed is not None:
             x = x + self.pos_embed
         attn = x + self.gamma * self.epa_block(self.norm(x))
@@ -63,7 +63,6 @@ class TransformerBlock(nn.Module):
         x = attn_skip + self.conv8(attn)
 
         return x
-
 
 class EPA(nn.Module):
     """

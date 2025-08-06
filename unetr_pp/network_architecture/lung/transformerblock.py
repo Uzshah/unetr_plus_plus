@@ -52,7 +52,7 @@ class TransformerBlock(nn.Module):
         self.ecd_block = ECD(
             depth_size=depth_size, 
             hidden_size=hidden_size, 
-            proj_size=proj_size, 
+            # proj_size=proj_size, 
             num_heads=num_heads, 
             channel_attn_drop=dropout_rate,
             spatial_attn_drop=dropout_rate
@@ -92,128 +92,78 @@ class TransformerBlock(nn.Module):
 
         return x
 
-
 class ECD(nn.Module):
-    """
-    Efficient Channel-Depth attention block - Optimized for reduced FLOPs
-    """
-    def __init__(self, depth_size: int, hidden_size, proj_size, num_heads=4, qkv_bias=False,
-                 channel_attn_drop=0.1, spatial_attn_drop=0.1, 
-                 noise_std=0.01, noise_schedule='fixed', apply_noise_to='input'):
+    def __init__(self, depth_size: int, hidden_size: int, num_heads=4,
+                 qkv_bias=False, spatial_attn_drop=0.1, channel_attn_drop=0.0):
         super().__init__()
+        self.hidden_size = hidden_size  # C
+        self.depth_size = depth_size    # D
         self.num_heads = num_heads
-        self.head_dim = hidden_size//num_heads
-        
-        # Noise parameters
-        self.noise_std = noise_std
-        self.noise_schedule = noise_schedule  # 'fixed', 'decay', 'adaptive'
-        self.apply_noise_to = apply_noise_to  # 'input', 'attention', 'features', 'all'
-        self.training_step = 0
-        
-        # Original layers
-        self.qkv_c = nn.Linear(hidden_size, hidden_size * 3, bias=qkv_bias)
-        self.qkv_d = nn.Linear(hidden_size, hidden_size, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(channel_attn_drop)
-        self.attn_drop_2 = nn.Dropout(spatial_attn_drop)
-        self.out_proj = nn.Linear(hidden_size, int(hidden_size // 2))
-        self.out_proj2 = nn.Linear(hidden_size, int(hidden_size // 2))
-    
-    def _get_noise_std(self):
-        """Get noise standard deviation based on schedule"""
-        if self.noise_schedule == 'fixed':
-            return self.noise_std
-        elif self.noise_schedule == 'decay':
-            # Exponential decay: starts high, decreases over time
-            decay_rate = 0.99
-            return self.noise_std * (decay_rate ** self.training_step)
-        elif self.noise_schedule == 'adaptive':
-            # Adaptive based on training progress (could be customized)
-            return self.noise_std * max(0.1, 1.0 - self.training_step / 10000)
-        else:
-            return self.noise_std
-    
-    def _add_gaussian_noise(self, tensor, std=None):
-        """Add Gaussian noise to tensor during training"""
-        if not self.training:
-            return tensor
-        
-        if std is None:
-            std = self._get_noise_std()
-        
-        noise = torch.randn_like(tensor) * std
-        return tensor + noise
-    
+        self.scale = (hidden_size*depth_size // num_heads) ** -0.5
+
+        # Linear: map C -> 3C
+        self.to_qkv = nn.Linear(hidden_size, 3 * hidden_size, bias=qkv_bias)
+
+        # Output projection: must be C*D -> C*D, NOT C -> C
+        self.proj_out = nn.Linear(hidden_size, hidden_size, bias=qkv_bias)
+        self.out_drop = nn.Dropout(channel_attn_drop)
+        self.attn_drop = nn.Dropout(spatial_attn_drop)
+
+        # LayerNorm
+        self.norm = nn.LayerNorm(hidden_size)
+
     def forward(self, x):
         B, C, D, H, W = x.shape
-        N = H * W
-        
-        # Update training step for noise scheduling
-        if self.training:
-            self.training_step += 1
-        
-        # Apply noise to input if specified
-        if self.apply_noise_to in ['input', 'all']:
-            x = self._add_gaussian_noise(x)
-        
-        x_reshaped = x.permute(0, 2, 3, 4, 1).view(B, D, N, C)
-        
-        qkv_c = self.qkv_c(x_reshaped).reshape(B, D, N, 3, C).permute(3, 0, 1, 2, 4)
-        q_d = self.qkv_d(x_reshaped).reshape(B, D, N, C)
-        q_c, k_c, v_c = qkv_c[0], qkv_c[1], qkv_c[2]
-        k_shared, v_shared = k_c, v_c
-        
-        # Apply noise to features if specified
-        if self.apply_noise_to in ['features', 'all']:
-            q_c = self._add_gaussian_noise(q_c, std=self._get_noise_std() * 0.5)
-            k_c = self._add_gaussian_noise(k_c, std=self._get_noise_std() * 0.5)
-            v_c = self._add_gaussian_noise(v_c, std=self._get_noise_std() * 0.5)
-            q_d = self._add_gaussian_noise(q_d, std=self._get_noise_std() * 0.5)
-        
-        # Channel attention 
-        q_c = q_c.reshape(B*D, N, self.num_heads, C//self.num_heads).permute(0, 2, 1, 3)
-        k_c = k_c.reshape(B*D, N, self.num_heads, C//self.num_heads).permute(0, 2, 1, 3)
-        v_c = v_c.reshape(B*D, N, self.num_heads, C//self.num_heads).permute(0, 2, 1, 3)
-        
-        q_c = q_c.transpose(-2, -1)
-        k_c = k_c.transpose(-2, -1)
-        v_c = v_c.transpose(-2, -1)
-        q_c = F.normalize(q_c, dim=-1)
-        k_c = F.normalize(k_c, dim=-1)
-        
-        attn_CA = (q_c @ k_c.transpose(-2, -1)) / (N ** 0.5)
-        
-        # Apply noise to attention weights if specified
-        if self.apply_noise_to in ['attention', 'all']:
-            attn_CA = self._add_gaussian_noise(attn_CA, std=self._get_noise_std() * 0.1)
-        
-        attn_CA = attn_CA.softmax(dim=-1)
-        attn_CA = self.attn_drop(attn_CA)
-        x_CA = (attn_CA @ v_c).reshape(B, D, C, N).permute(0, 1, 3, 2)
-        x_CA = self.out_proj(x_CA)
-        
-        # Depth attention
-        q_d = q_d.permute(0, 3, 2, 1).reshape(B*C, N, D) 
-        k_d = k_shared.permute(0, 3, 2, 1).reshape(B*C, N, D) 
-        v_d = v_shared.permute(0, 3, 2, 1).reshape(B*C, N, D) 
-        
-        q_d = q_d.transpose(-2, -1)
-        k_d = k_d.transpose(-2, -1)
-        v_d = v_d.transpose(-2, -1)
-        q_d = F.normalize(q_d, dim=-1)
-        k_d = F.normalize(k_d, dim=-1)
-        
-        attn_D = (q_d @ k_d.transpose(-2, -1)) / (N ** 0.5)
-        
-        # Apply noise to depth attention weights if specified
-        if self.apply_noise_to in ['attention', 'all']:
-            attn_D = self._add_gaussian_noise(attn_D, std=self._get_noise_std() * 0.1)
-        
-        attn_D = attn_D.softmax(dim=-1)
-        attn_D = self.attn_drop_2(attn_D)
-        x_D = (attn_D @ v_d)
-        x_D = x_D.reshape(B, C, D, N).permute(0, 2, 3, 1)
-        x_D = self.out_proj2(x_D)
-        
-        x = torch.cat((x_CA, x_D), dim=-1).permute(0, 3, 1, 2).reshape(B, C, D, H, W)
-        
-        return x
+        N = H * W  # Spatial positions
+
+        # -------------------------------
+        # 1. Reshape to (B, D, H, W, C)
+        # -------------------------------
+        x = x.permute(0, 3, 4, 1, 2).contiguous()  # (B, H, W, C, D)
+        x = x.permute(0, 4, 1, 2, 3).contiguous()  # (B, D, H, W, C)
+        x = self.norm(x)
+
+        # -------------------------------
+        # 2. Linear: C -> 3C
+        # -------------------------------
+        qkv = self.to_qkv(x)  # (B, D, H, W, 3C)
+        q, k, v = qkv.chunk(3, dim=-1)  # Each: (B, D, H, W, C)
+
+        # -------------------------------
+        # 3. Reshape to (B, H*W, C*D) for attention over spatial dim
+        # -------------------------------
+        # Permute: (B, D, H, W, C) -> (B, H, W, D, C) -> (B, H*W, D*C)
+        q = q.permute(0, 2, 3, 1, 4).contiguous().view(B, N, D * C)
+        k = k.permute(0, 2, 3, 1, 4).contiguous().view(B, N, D * C)
+        v = v.permute(0, 2, 3, 1, 4).contiguous().view(B, N, D * C)
+
+        # -------------------------------
+        # 4. Multi-head attention over N = H*W
+        # -------------------------------
+        # Reshape for multi-head
+        q = q.view(B, N, self.num_heads, -1).transpose(1, 2)  # (B, h, N, head_dim)
+        k = k.view(B, N, self.num_heads, -1).transpose(1, 2)
+        v = v.view(B, N, self.num_heads, -1).transpose(1, 2)
+
+        # Attention
+        dots = torch.matmul(q, k.transpose(-2, -1)) * self.scale  # (B, h, N, N)
+        attn = dots.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+
+        # Output
+        out = torch.matmul(attn, v)  # (B, h, N, head_dim)
+        out = out.transpose(1, 2).contiguous().view(B, N, D, C)  # (B, N, C*D)
+
+        # -------------------------------
+        # 5. Project back: C*D -> C*D
+        # -------------------------------
+        out = self.proj_out(out)  # (B, N, C*D)
+        out = self.out_drop(out)
+
+        # -------------------------------
+        # 6. Reshape back to (B, C, D, H, W)
+        # -------------------------------
+        out = out.view(B, H, W, D, C)
+        out = out.permute(0, 4, 3, 1, 2).contiguous()  # (B, C, D, H, W)
+
+        return out

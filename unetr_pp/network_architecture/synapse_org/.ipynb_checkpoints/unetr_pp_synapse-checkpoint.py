@@ -67,7 +67,7 @@ class UNETR_PP(SegmentationNetwork):
 
         self.patch_size = (2, 4, 4)
         self.feat_size = (
-            img_size[0] // self.patch_size[0] // 8,  # 8 is the downsampling happened through the four encoders stages
+            img_size[0] // self.patch_size[0]// 8,  # 8 is the downsampling happened through the four encoders stages
             img_size[1] // self.patch_size[1] // 8,  # 8 is the downsampling happened through the four encoders stages
             img_size[2] // self.patch_size[2] // 8,  # 8 is the downsampling happened through the four encoders stages
         )
@@ -88,7 +88,7 @@ class UNETR_PP(SegmentationNetwork):
             in_channels=feature_size * 16,
             out_channels=feature_size * 8,
             kernel_size=3,
-            upsample_kernel_size=2,
+            upsample_kernel_size=2,#(1, 2, 2,),
             norm_name=norm_name,
             out_size=8 * 8 * 8,
         )
@@ -97,7 +97,7 @@ class UNETR_PP(SegmentationNetwork):
             in_channels=feature_size * 8,
             out_channels=feature_size * 4,
             kernel_size=3,
-            upsample_kernel_size=2,
+            upsample_kernel_size=2,#(1, 2, 2,),
             norm_name=norm_name,
             out_size=16 * 16 * 16,
         )
@@ -106,7 +106,7 @@ class UNETR_PP(SegmentationNetwork):
             in_channels=feature_size * 4,
             out_channels=feature_size * 2,
             kernel_size=3,
-            upsample_kernel_size=2,
+            upsample_kernel_size=2, #(1, 2, 2,),
             norm_name=norm_name,
             out_size=32 * 32 * 32,
         )
@@ -143,6 +143,7 @@ class UNETR_PP(SegmentationNetwork):
 
         # Four decoders
         dec4 = self.proj_feat(enc4, self.hidden_size, self.feat_size)
+        # print(dec4.shape, enc3.shape)
         dec3 = self.decoder5(dec4, enc3)
         dec2 = self.decoder4(dec3, enc2)
         dec1 = self.decoder3(dec2, enc1)
